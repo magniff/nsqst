@@ -1,0 +1,10 @@
+.*
+!.gitignore
+
+!/.cargo
+!/.dockerignore
+!/.gitlab-ci.yml
+!/.pre-commit-config.yaml
+
+/target
+/video_output
