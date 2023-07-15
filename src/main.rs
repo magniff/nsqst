@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use diesel;
-use log::{error, info};
+use log::info;
 use tokio::io::AsyncWriteExt;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_nsq::{
-    NSQChannel, NSQConsumerConfig, NSQConsumerConfigSources, NSQEvent, NSQProducerConfig, NSQTopic,
+    NSQChannel, NSQConfigShared, NSQConsumerConfig, NSQConsumerConfigSources, NSQEvent,
+    NSQProducerConfig, NSQTopic,
 };
 
 #[derive(Parser, Debug, Clone, Copy)]
@@ -33,6 +33,14 @@ struct Arguments {
         help = "How many milliseconds will the writer sleep until the next write"
     )]
     sleep: u64,
+
+    #[arg(
+        short,
+        long,
+        default_value = "25",
+        help = "How does the writer flush its socket"
+    )]
+    flush_time: u64,
 
     #[arg(long, default_value = "20", help = "Max-in-flight messages")]
     max_in_flight: u32,
@@ -70,6 +78,7 @@ pub struct WriterArguments {
     pub topic_name: Arc<String>,
     pub message_size: usize,
     pub sleep_time: u64,
+    pub flush_time: u64,
     pub message_count: usize,
 }
 
@@ -106,7 +115,12 @@ pub async fn reader(arguments: ReaderArguments) -> anyhow::Result<()> {
 }
 
 pub async fn writer(arguments: WriterArguments) -> anyhow::Result<()> {
-    let mut writer_backend = NSQProducerConfig::new(arguments.address.to_string()).build();
+    let mut writer_backend = NSQProducerConfig::new(arguments.address.to_string())
+        .set_shared(
+            NSQConfigShared::new()
+                .set_flush_interval(std::time::Duration::from_millis(arguments.flush_time)),
+        )
+        .build();
     let Some(topic) = NSQTopic::new(arguments.topic_name.to_string()) else {
         anyhow::bail!("Topic name is not ok");
     };
@@ -147,8 +161,10 @@ async fn telemetry_processor(
 ) -> anyhow::Result<()> {
     let mut messages_current = 0usize;
     while let Some(message) = telemetry_receiver.recv().await {
-        // println!("{message:?}");
-        println!("{messages_current} {messages_count}");
+        // println!(
+        //     "{messages_current}/{messages_count} :: {delay}",
+        //     delay = message.io_delay
+        // );
         messages_current += 1;
         if messages_current == messages_count {
             break;
@@ -207,6 +223,7 @@ async fn async_main(arguments: Arguments) -> anyhow::Result<()> {
                     message_size: arguments.message_size,
                     sleep_time: arguments.sleep,
                     message_count: arguments.message_count,
+                    flush_time: arguments.flush_time,
                 }))
             })
         })
